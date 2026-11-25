@@ -1,0 +1,40 @@
+[gd_scene format=3 uid="uid://p34l07qi7va1"]
+
+[ext_resource type="Script" uid="uid://c3gkeyk0y65gc" path="res://Scripts/Units/base_unit.gd" id="1_base"]
+[ext_resource type="PackedScene" uid="uid://drv4ofrxjx5mq" path="res://Scenes/Units/hp_bar.tscn" id="2_hpbar"]
+
+[sub_resource type="CapsuleShape3D" id="CapsuleShape3D_base"]
+radius = 0.4
+height = 1.5
+
+[sub_resource type="ViewportTexture" id="ViewportTexture_bkgmb"]
+viewport_path = NodePath("SubViewport")
+
+[sub_resource type="TorusMesh" id="TorusMesh_base"]
+inner_radius = 0.55
+outer_radius = 0.7
+
+[sub_resource type="StandardMaterial3D" id="StandardMaterial3D_base"]
+
+[node name="Base Unit" type="CharacterBody3D" unique_id=1206759049]
+script = ExtResource("1_base")
+
+[node name="CollisionShape3D" type="CollisionShape3D" parent="." unique_id=1654555892]
+shape = SubResource("CapsuleShape3D_base")
+
+[node name="NavigationAgent3D" type="NavigationAgent3D" parent="." unique_id=1706514707]
+avoidance_enabled = true
+
+[node name="Model Holder" type="Node3D" parent="." unique_id=1290961228]
+
+[node name="Health Bar" parent="." unique_id=1307685597 instance=ExtResource("2_hpbar")]
+texture = SubResource("ViewportTexture_bkgmb")
+
+[node name="Selected Mesh" type="MeshInstance3D" parent="." unique_id=1465411022]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, -0.6678342, 0)
+visible = false
+mesh = SubResource("TorusMesh_base")
+surface_material_override/0 = SubResource("StandardMaterial3D_base")
+
+[node name="Attack Cooldown Timer" type="Timer" parent="." unique_id=2079290219]
+one_shot = true

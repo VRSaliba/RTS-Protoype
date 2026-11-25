@@ -1,0 +1,12 @@
+[gd_resource type="Resource" script_class="UnitBaseStats" format=3 uid="uid://cjr7r5xpe74y0"]
+
+[ext_resource type="Script" uid="uid://c6r5jtj10c3ie" path="res://Scripts/base resources/unit_base_stats.gd" id="1_bx51p"]
+
+[resource]
+script = ExtResource("1_bx51p")
+max_health_points = 100.0
+current_health_points = 100.0
+movement_speed = 2.0
+attack_speed = 1.2
+attack = 10
+metadata/_custom_type_script = "uid://c6r5jtj10c3ie"

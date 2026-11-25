@@ -1,0 +1,15 @@
+[gd_resource type="Resource" script_class="UnitData" format=3 uid="uid://bcn2n8jyisaeh"]
+
+[ext_resource type="Resource" uid="uid://cjr7r5xpe74y0" path="res://Resources/Units/K-buto/k-buto_base_stats.tres" id="1_gspmx"]
+[ext_resource type="Texture2D" uid="uid://dvj7k1ionkibs" path="res://Resources/Icons/Screenshot 2026-11-23 180945.png" id="2_o8res"]
+[ext_resource type="PackedScene" uid="uid://qsxyj0k816w5" path="res://Scenes/Imported 3D Models/k-buto.tscn" id="3_otk63"]
+[ext_resource type="Script" uid="uid://ua6b30uhdqnw" path="res://Scripts/base resources/unit_data.gd" id="4_2xf7d"]
+[ext_resource type="Script" uid="uid://clbrts7dbdyn2" path="res://Scripts/base resources/skill_data.gd" id="5_y2tfs"]
+
+[resource]
+script = ExtResource("4_2xf7d")
+display_name = "K-buto"
+icon = ExtResource("2_o8res")
+model_scene = ExtResource("3_otk63")
+base_stats = ExtResource("1_gspmx")
+metadata/_custom_type_script = "uid://ua6b30uhdqnw"

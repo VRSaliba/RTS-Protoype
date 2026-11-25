@@ -1,0 +1,77 @@
+[gd_scene format=3 uid="uid://tx46vr0ac1ho"]
+
+[ext_resource type="Script" uid="uid://cifjh2yx0mwha" path="res://Scripts/Levels/battle_ui.gd" id="1_sd8c3"]
+
+[node name="Battle Ui" type="Control" unique_id=70806394]
+layout_mode = 3
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+mouse_filter = 1
+script = ExtResource("1_sd8c3")
+
+[node name="MarginContainer" type="MarginContainer" parent="." unique_id=759365555]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+theme_override_constants/margin_bottom = 25
+
+[node name="VBoxContainer" type="VBoxContainer" parent="MarginContainer" unique_id=387353349]
+layout_mode = 2
+size_flags_horizontal = 4
+size_flags_vertical = 8
+
+[node name="Pause Label" type="Label" parent="MarginContainer/VBoxContainer" unique_id=759964251]
+layout_mode = 2
+horizontal_alignment = 1
+
+[node name="Confirm Target Button" type="Button" parent="MarginContainer/VBoxContainer" unique_id=916399044]
+visible = false
+layout_mode = 2
+text = "Confirm Target"
+
+[node name="HBoxContainer" type="HBoxContainer" parent="MarginContainer/VBoxContainer" unique_id=1078343120]
+layout_mode = 2
+size_flags_horizontal = 4
+size_flags_vertical = 4
+
+[node name="Move Button" type="Button" parent="MarginContainer/VBoxContainer/HBoxContainer" unique_id=375806006]
+custom_minimum_size = Vector2(50, 50)
+layout_mode = 2
+focus_mode = 0
+text = "Move"
+
+[node name="Attack Button" type="Button" parent="MarginContainer/VBoxContainer/HBoxContainer" unique_id=794815885]
+custom_minimum_size = Vector2(50, 50)
+layout_mode = 2
+size_flags_horizontal = 4
+size_flags_vertical = 4
+focus_mode = 0
+text = "Attack"
+
+[node name="Skill Button" type="Button" parent="MarginContainer/VBoxContainer/HBoxContainer" unique_id=1281995362]
+custom_minimum_size = Vector2(50, 50)
+layout_mode = 2
+size_flags_horizontal = 4
+size_flags_vertical = 4
+focus_mode = 0
+text = "Skill"
+
+[node name="VBoxContainer2" type="VBoxContainer" parent="MarginContainer" unique_id=163512295]
+layout_mode = 2
+size_flags_horizontal = 4
+size_flags_vertical = 0
+
+[node name="Time Label" type="Label" parent="MarginContainer/VBoxContainer2" unique_id=2146757264]
+layout_mode = 2
+text = "00:00.000"
+
+[connection signal="pressed" from="MarginContainer/VBoxContainer/Confirm Target Button" to="." method="_on_confirm_target_button_pressed"]
+[connection signal="pressed" from="MarginContainer/VBoxContainer/HBoxContainer/Move Button" to="." method="_on_move_button_pressed"]
+[connection signal="pressed" from="MarginContainer/VBoxContainer/HBoxContainer/Attack Button" to="." method="_on_attack_button_pressed"]
+[connection signal="pressed" from="MarginContainer/VBoxContainer/HBoxContainer/Skill Button" to="." method="_on_skill_button_pressed"]

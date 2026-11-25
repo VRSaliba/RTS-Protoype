@@ -1,0 +1,63 @@
+[gd_scene format=3 uid="uid://qsxyj0k816w5"]
+
+[ext_resource type="PackedScene" uid="uid://ijkkcyei2ilp" path="res://Resources/3d models/K-buto/Trab_Final_Animacao_Export.glb" id="1_o3crp"]
+[ext_resource type="Script" uid="uid://cnpwu5d1mhh0y" path="res://Scripts/Units/unit_model.gd" id="2_riey3"]
+[ext_resource type="Script" uid="uid://ctmbvrnpv0tf4" path="res://Scripts/Units/model_animator.gd" id="3_criip"]
+[ext_resource type="Script" uid="uid://crd1e4ffqqbve" path="res://Scripts/Units/leg_setup.gd" id="4_legsetup"]
+[ext_resource type="Script" uid="uid://dm08xg0va7i3l" path="res://Scripts/Units/procedural_legs.gd" id="5_legs"]
+
+[sub_resource type="Resource" id="Resource_legFrontL"]
+script = ExtResource("4_legsetup")
+root_bone = "FrontLeg1.L"
+end_bone = "FrontLeg2.L.003"
+pole_bone = "FrontElbowTarget.L"
+
+[sub_resource type="Resource" id="Resource_legMiddleR"]
+script = ExtResource("4_legsetup")
+root_bone = "MiddleLeg1.R"
+end_bone = "MiddleLeg2.R.002"
+pole_bone = "MiddleElbowTarget.R"
+
+[sub_resource type="Resource" id="Resource_legBackL"]
+script = ExtResource("4_legsetup")
+root_bone = "BackLeg1.L"
+end_bone = "Bone"
+pole_bone = "BackLeg1.L.001"
+
+[sub_resource type="Resource" id="Resource_legFrontR"]
+script = ExtResource("4_legsetup")
+root_bone = "FrontLeg1.R"
+end_bone = "FrontLeg2.R.003"
+pole_bone = "FrontElbowTarget.R"
+gait_group = 1
+
+[sub_resource type="Resource" id="Resource_legMiddleL"]
+script = ExtResource("4_legsetup")
+root_bone = "MiddleLeg1.L"
+end_bone = "MiddleLeg2.L.002"
+pole_bone = "MiddleElbowTarget.L"
+gait_group = 1
+
+[sub_resource type="Resource" id="Resource_legBackR"]
+script = ExtResource("4_legsetup")
+root_bone = "BackLeg1.R"
+end_bone = "BackLeg2.R.010"
+pole_bone = "BackLeg1.R.001"
+gait_group = 1
+
+[node name="K-buto" unique_id=1032627258 instance=ExtResource("1_o3crp")]
+transform = Transform3D(0.3, 0, 0, 0, 0.3, 0, 0, 0, 0.3, 0, 0, 0)
+script = ExtResource("2_riey3")
+radius = 0.7
+height = 1.4
+
+[node name="Plane" parent="." index="1" unique_id=417525301]
+visible = false
+
+[node name="ModelAnimator" type="Node" parent="." index="3" unique_id=1046947680]
+script = ExtResource("3_criip")
+
+[node name="ProceduralLegs" type="Node" parent="." index="4" unique_id=1068365317]
+script = ExtResource("5_legs")
+legs = Array[ExtResource("4_legsetup")]([SubResource("Resource_legFrontL"), SubResource("Resource_legMiddleR"), SubResource("Resource_legBackL"), SubResource("Resource_legFrontR"), SubResource("Resource_legMiddleL"), SubResource("Resource_legBackR")])
+debug_show_targets = true

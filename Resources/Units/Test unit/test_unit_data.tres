@@ -1,0 +1,13 @@
+[gd_resource type="Resource" script_class="UnitData" format=3 uid="uid://dacs12i37ygyy"]
+
+[ext_resource type="Resource" uid="uid://b837a80t6agyw" path="res://Resources/Units/Test unit/test_unit_base_stats.tres" id="1_jgukg"]
+[ext_resource type="Script" uid="uid://ua6b30uhdqnw" path="res://Scripts/base resources/unit_data.gd" id="1_y1gum"]
+[ext_resource type="Script" uid="uid://clbrts7dbdyn2" path="res://Scripts/base resources/skill_data.gd" id="2_jgukg"]
+[ext_resource type="PackedScene" uid="uid://qsxyj0k816w5" path="res://Scenes/Imported 3D Models/k-buto.tscn" id="2_swihs"]
+
+[resource]
+script = ExtResource("1_y1gum")
+display_name = "Test Unit"
+model_scene = ExtResource("2_swihs")
+base_stats = ExtResource("1_jgukg")
+metadata/_custom_type_script = "uid://ua6b30uhdqnw"
