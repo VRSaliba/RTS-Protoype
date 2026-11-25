@@ -60,4 +60,5 @@ script = ExtResource("3_criip")
 [node name="ProceduralLegs" type="Node" parent="." index="4" unique_id=1068365317]
 script = ExtResource("5_legs")
 legs = Array[ExtResource("4_legsetup")]([SubResource("Resource_legFrontL"), SubResource("Resource_legMiddleR"), SubResource("Resource_legBackL"), SubResource("Resource_legFrontR"), SubResource("Resource_legMiddleL"), SubResource("Resource_legBackR")])
+debug_print = true
 debug_show_targets = true

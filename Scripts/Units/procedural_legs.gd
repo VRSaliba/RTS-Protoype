@@ -80,6 +80,9 @@ class Foot:
 	var step_time: float = 0.0
 	var step_duration: float = 0.2
 	var stepping: bool = false
+	var body_offset: Vector3
+	var tip_rest_basis: Basis
+	var pole_bone: int = -1
 
 
 var _unit: CharacterBody3D
@@ -112,6 +115,12 @@ func _build() -> void:
 			push_error("ProceduralLegs: bone '%s' or '%s' not found in the skeleton." % [leg.root_bone, leg.end_bone])
 			continue
 		var chain := _chain_bones(root_id, tip_id)
+
+		var names := []
+		for bone_id in chain:
+			names.append(skeleton.get_bone_name(bone_id))
+		print("Chain:", names)
+
 		if chain.size() < 2:
 			push_error("ProceduralLegs: '%s' is not a parent of '%s'." % [leg.root_bone, leg.end_bone])
 			continue
@@ -123,8 +132,11 @@ func _build() -> void:
 		foot.reach = length * world_scale
 		var hip_rest := skeleton.get_bone_global_rest(root_id).origin
 		foot.home_skel = skeleton.get_bone_global_rest(tip_id).origin
+		foot.tip_rest_basis = skeleton.get_bone_global_rest(tip_id).basis
+		foot.body_offset = foot.home_skel
 		foot.use_magnet = chain.size() > 2
 		var pole_id := skeleton.find_bone(leg.pole_bone) if leg.pole_bone != "" else -1
+		foot.pole_bone = pole_id
 		if leg.pole_bone != "" and pole_id < 0:
 			push_warning("ProceduralLegs: pole bone '%s' not found, using the knee's rest position." % leg.pole_bone)
 		if pole_id >= 0:
@@ -162,7 +174,7 @@ func _build() -> void:
 		ik.target_node = ik.get_path_to(marker)
 		ik.use_magnet = foot.use_magnet
 		ik.magnet = foot.magnet_skel
-		ik.override_tip_basis = false
+		ik.override_tip_basis = true
 		ik.max_iterations = max_iterations
 		ik.influence = 0.0
 		ik.start()
@@ -170,6 +182,18 @@ func _build() -> void:
 		
 		_feet.append(foot)
 	_replant()
+
+
+func _update_elbow_target(foot: Foot) -> void:
+	if foot.pole_bone < 0:
+		return
+
+	foot.magnet_skel = skeleton.get_bone_global_pose(foot.pole_bone).origin
+
+	foot.ik.magnet = foot.magnet_skel
+
+	if foot.magnet_marker:
+		foot.magnet_marker.global_position = skeleton.global_transform * foot.magnet_skel
 
 
 func _make_debug_sphere(radius: float) -> MeshInstance3D:
@@ -224,6 +248,7 @@ func _process(delta: float) -> void:
 	_blend = move_toward(_blend, 1.0 if active else 0.0, delta * blend_speed)
 	for foot in _feet:
 		foot.ik.influence = _blend
+		_update_elbow_target(foot)
 		if foot.magnet_marker:
 			foot.magnet_marker.global_position = skeleton.global_transform * foot.magnet_skel
 	
@@ -253,6 +278,7 @@ func _replant() -> void:
 		foot.stepping = false
 		foot.planted = _ground_point(foot, _home_world(foot))
 		foot.target.global_position = _clamp_to_reach(foot, foot.planted)
+		_update_foot_basis(foot)
 
 
 # Drops a ray straight down at this spot and returns the ground it hits (the
@@ -270,7 +296,17 @@ func _ground_point(foot: Foot, pos: Vector3) -> Vector3:
 
 
 func _home_world(foot: Foot) -> Vector3:
-	return skeleton.global_transform * foot.home_skel
+	return (
+		skeleton.global_transform.origin +
+		skeleton.global_transform.basis * foot.body_offset
+	)
+
+
+func _update_foot_basis(foot: Foot) -> void:
+	foot.target.global_basis = (
+		skeleton.global_transform.basis *
+		foot.tip_rest_basis
+	).orthonormalized()
 
 
 # Keeps a target within the leg's reach so the solver never has to chase a
@@ -299,13 +335,16 @@ func _update_steps(delta: float) -> void:
 			var pos := foot.step_from.lerp(foot.step_to, eased)
 			pos.y += sin(t * PI) * step_height_ratio * foot.reach
 			foot.target.global_position = _clamp_to_reach(foot, pos)
+			_update_foot_basis(foot)
 			if t >= 1.0:
 				foot.stepping = false
 				foot.planted = foot.step_to
 				foot.target.global_position = _clamp_to_reach(foot, foot.planted)
+				_update_foot_basis(foot)
 			continue
 		
 		foot.target.global_position = _clamp_to_reach(foot, foot.planted)
+		_update_foot_basis(foot)
 		var home := _home_world(foot)
 		var offset := foot.planted - home
 		offset.y = 0.0
