@@ -66,3 +66,10 @@ script = ExtResource("3_criip")
 [node name="ProceduralLegs" type="Node" parent="." index="4" unique_id=708249201]
 script = ExtResource("5_legs")
 legs = Array[ExtResource("4_legsetup")]([SubResource("Resource_legFrontL"), SubResource("Resource_legMiddleR"), SubResource("Resource_legBackL"), SubResource("Resource_legFrontR"), SubResource("Resource_legMiddleL"), SubResource("Resource_legBackR")])
+step_trigger_ratio = 0.22
+horizontal_speed = 0.7
+lift_speed = 0.6
+lower_speed = 3.0
+step_height_ratio = 0.5
+min_step_duration = 0.3
+zone_ratio = 1.0

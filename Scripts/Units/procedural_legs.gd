@@ -63,6 +63,16 @@ extends Node
 ## line (fraction of leg length).
 @export var home_outward_ratio: float = 0.0
 
+@export_group("Leg zones")
+## Each leg may only roam inside its own zone along the body, so neighbouring
+## legs on the same side never cross. 1.0 = the zone reaches halfway to the
+## next leg; lower keeps the legs further apart.
+@export_range(0.1, 1.0) var zone_ratio: float = 0.9
+## Feet must stay at least this fraction of their normal sideways distance from
+## the body's centre line, so they never end up under the model (also while
+## turning). 0 = no limit.
+@export_range(0.0, 1.0) var min_lateral_ratio: float = 0.55
+
 @export_group("Ground")
 ## Physics layers the feet can stand on. Put your floor and terrain on these
 ## layers (and keep units off them), or feet may land on other units.
@@ -80,6 +90,49 @@ extends Node
 ## Keeps the knee bone's twist facing the pole, as it does in the rest pose.
 ## Turn off if the leg meshes look twisted.
 @export var use_pole_twist: bool = true
+
+@export_group("Body wobble")
+## Makes the body sway while walking, like a beetle's alternating tripod gait:
+## the body leans and turns slightly toward the side of the legs that are
+## holding it up, then the other side, and bobs a little with every step.
+@export var wobble_enabled: bool = true
+## The bone that moves the whole body (the root of the body in the skeleton).
+@export var body_bone: String = "HeadBase"
+## Optional. The abdomen's bone, which sways against the body for a looser feel.
+@export var abdomen_bone: String = "BackLegsBase"
+## Sideways lean in degrees. Positive leans toward the side with two supporting
+## legs; negative the other way.
+@export var wobble_roll_degrees: float = 4.0
+## Turning of the body left and right in degrees. Positive turns the head away
+## from the side of the front supporting leg; flip the sign if it looks wrong.
+@export var wobble_yaw_degrees: float = 3.0
+## How much the abdomen turns the opposite way, in degrees.
+@export var wobble_abdomen_yaw_degrees: float = 4.0
+## Sideways shift of the body toward the leaning side (fraction of leg length).
+@export var wobble_sway_ratio: float = 0.03
+## Up and down bob with every step (fraction of leg length). Negative makes the
+## body dip instead of rise.
+@export var wobble_bob_ratio: float = 0.02
+## How quickly the wobble follows the legs. Higher = snappier, lower = smoother.
+@export var wobble_smoothing: float = 20.0
+
+@export_group("Finger lag")
+## While walking, the fingers (the foot's tip bones) lag behind the foot's up and
+## down movement, on a single axis: they tilt DOWN while the foot rises (first
+## half of a step), UP while it comes back down (second half), then settle.
+@export var finger_lag_enabled: bool = true
+## How far the fingers tilt down while the foot rises, in degrees.
+@export var finger_down_degrees: float = 12.0
+## How far the fingers tilt up while the foot comes down, in degrees.
+@export var finger_up_degrees: float = 12.0
+## Seconds the fingers take to tilt all the way down.
+@export var finger_down_time: float = 0.12
+## Seconds the fingers take to tilt all the way up.
+@export var finger_up_time: float = 0.12
+## Seconds the fingers take to settle back to normal once the foot has landed.
+@export var finger_return_time: float = 0.15
+## Flips the tilt direction (down becomes up).
+@export var finger_lag_invert: bool = false
 
 @export_group("Blend")
 ## How fast the IK fades in and out when switching to or from walking.
@@ -103,8 +156,15 @@ class Foot:
 	var pole_skel: Vector3      # pole position, skeleton space
 	var reach: float            # hip -> knee -> ankle length, world units
 	var group: int = 0
+	var side: float = 1.0       # +1 or -1: which side of the body the leg is on
+	var leg_skel: float = 1.0   # leg length in skeleton units
+	var z_back_room: float = 1.0   # how far behind its home spot the foot may go (skeleton units)
+	var z_front_room: float = 1.0  # ...and how far ahead
 	var planted: Vector3        # world position of the foot tip on the ground
 	var normal: Vector3 = Vector3.UP
+	var tip_bone: int = -1          # the finger bone
+	var finger_phase: float = 0.0   # -1 foot rising (fingers go down), +1 foot falling (fingers go up), 0 planted
+	var finger_pos: float = 0.0     # -1 fully down ... +1 fully up
 	var tip: Vector3            # current foot tip position (planted or mid-step)
 	var step_from: Vector3
 	var step_to: Vector3
@@ -125,6 +185,15 @@ var _blend: float = 0.0
 var _was_active: bool = false
 var _debug_printed: bool = false
 var _debug_lines: Array[String] = []
+var _angular_velocity: float = 0.0  # the unit's turning rate, rad/s
+var _wobble: BodyWobbleModifier
+var _fingers: FingerLagModifier
+var _body_bone: int = -1
+var _abdomen_bone: int = -1
+var _leg_skel_average: float = 1.0
+var _wobble_lean: float = 0.0
+var _wobble_bob: float = 0.0
+var _prev_yaw: float = 0.0
 
 
 func _ready() -> void:
@@ -180,8 +249,11 @@ func _build() -> void:
 		foot.group = leg.gait_group
 		foot.root_bone = root_id
 		foot.end_bone = end_id
+		foot.tip_bone = tip_id
 		foot.reach = (upper + lower) * world_scale
+		foot.leg_skel = upper + lower
 		foot.home_skel = tip_rest.origin
+		foot.side = signf(tip_rest.origin.x) if absf(tip_rest.origin.x) > 0.001 else 1.0
 		foot.foot_vec_skel = tip_rest.origin - ankle_rest.origin
 		foot.ankle_basis_skel = ankle_rest.basis.orthonormalized()
 		
@@ -217,14 +289,27 @@ func _build() -> void:
 			leg.root_bone, skeleton.get_bone_name(middle_id), leg.end_bone,
 			skeleton.get_bone_name(tip_id), foot.reach, foot.pole_skel])
 	
+	_compute_zones()
+	
 	# One TwoBoneIK3D handles every leg; the FootAligner is added after it so it
 	# runs after the IK.
+	var leg_total := 0.0
+	for foot in _feet:
+		leg_total += foot.leg_skel
+	_leg_skel_average = leg_total / maxf(float(_feet.size()), 1.0)
+	_setup_wobble()
+	
 	_ik = TwoBoneIK3D.new()
 	_ik.name = "LegIK"
 	skeleton.add_child(_ik)
 	_aligner = FootAligner.new()
 	_aligner.name = "FootAligner"
 	skeleton.add_child(_aligner)
+	_fingers = FingerLagModifier.new()
+	_fingers.name = "FingerLag"
+	skeleton.add_child(_fingers)  # after the IK and the aligner
+	_fingers.influence = 0.0
+	_fingers.active = false
 	
 	_ik.setting_count = valid_legs.size()
 	for i in valid_legs.size():
@@ -257,6 +342,112 @@ func _build() -> void:
 	_replant()
 
 
+# Legs on the same side are ordered along the body (skeleton +Z is forward).
+# Each leg gets room up to the middle of the gap to its neighbours.
+func _compute_zones() -> void:
+	for foot in _feet:
+		var back_gap := INF
+		var front_gap := INF
+		for other in _feet:
+			if other == foot or other.side != foot.side:
+				continue
+			var gap := other.home_skel.z - foot.home_skel.z
+			if gap > 0.0:
+				front_gap = minf(front_gap, gap)
+			elif gap < 0.0:
+				back_gap = minf(back_gap, -gap)
+		# Outermost legs have no neighbour on that side: half a leg of room.
+		foot.z_front_room = foot.leg_skel * 0.5 if front_gap == INF else front_gap * 0.5 * zone_ratio
+		foot.z_back_room = foot.leg_skel * 0.5 if back_gap == INF else back_gap * 0.5 * zone_ratio
+		_debug_lines.append("zone side %+.0f z %.2f: %.2f back, %.2f ahead" % [
+			foot.side, foot.home_skel.z, foot.z_back_room, foot.z_front_room])
+
+
+# The fingers follow the two halves of a step: while the foot rises they tilt
+# down, while it comes back down they tilt up, and once it has landed they settle
+# back. Each tilt takes the time set in the inspector. One axis only.
+func _update_fingers(delta: float) -> void:
+	for foot in _feet:
+		if foot.stepping:
+			var rise := clampf(foot.step_time / foot.lift_time, 0.0, 1.0)
+			var fall := clampf((foot.step_duration - foot.step_time) / foot.lower_time, 0.0, 1.0)
+			if rise < fall:
+				foot.finger_phase = -1.0   # still rising
+			elif fall < rise:
+				foot.finger_phase = 1.0    # coming down
+			# (equal = the top of the step: keep the current direction)
+		else:
+			foot.finger_phase = 0.0
+		
+		var time := finger_return_time
+		if foot.finger_phase < 0.0:
+			time = finger_down_time
+		elif foot.finger_phase > 0.0:
+			time = finger_up_time
+		foot.finger_pos = move_toward(foot.finger_pos, foot.finger_phase, delta / maxf(time, 0.001))
+		
+		var amount := absf(foot.finger_pos)
+		var eased := amount * amount * (3.0 - 2.0 * amount)
+		var degrees := finger_up_degrees if foot.finger_pos > 0.0 else finger_down_degrees
+		var angle := signf(foot.finger_pos) * eased * deg_to_rad(degrees)
+		_fingers.set_angle(foot.tip_bone, -angle if finger_lag_invert else angle)
+
+
+func _setup_wobble() -> void:
+	_body_bone = skeleton.find_bone(body_bone)
+	if _body_bone < 0:
+		push_warning("ProceduralLegs: body bone '%s' not found, so there is no body wobble." % body_bone)
+		return
+	_abdomen_bone = skeleton.find_bone(abdomen_bone) if abdomen_bone != "" else -1
+	_wobble = BodyWobbleModifier.new()
+	_wobble.name = "BodyWobble"
+	skeleton.add_child(_wobble)  # added before the IK, so it runs before it
+	_wobble.influence = 0.0
+	_wobble.active = false
+
+
+# The wobble follows the gait: while one tripod swings, the other holds the body
+# up and the body leans toward the side with two supporting legs.
+func _update_wobble(delta: float) -> void:
+	if _wobble == null:
+		return
+	var swing := [0.0, 0.0]
+	var side_sum := [0.0, 0.0]
+	for foot in _feet:
+		side_sum[foot.group] += foot.side
+		if foot.stepping:
+			var t := clampf(foot.step_time / foot.step_duration, 0.0, 1.0)
+			swing[foot.group] = maxf(swing[foot.group], sin(t * PI))
+	
+	var lean_target: float = swing[1] * signf(side_sum[0]) + swing[0] * signf(side_sum[1])
+	var bob_target: float = maxf(swing[0], swing[1])
+	var follow := 1.0 - exp(-wobble_smoothing * delta)
+	_wobble_lean = lerpf(_wobble_lean, lean_target, follow)
+	_wobble_bob = lerpf(_wobble_bob, bob_target, follow)
+	
+	# Skeleton space: +X is the left side, +Y up, +Z forward.
+	var roll := -_wobble_lean * deg_to_rad(wobble_roll_degrees)
+	var yaw := -_wobble_lean * deg_to_rad(wobble_yaw_degrees)
+	var body_rotation := Basis(Vector3.UP, yaw) * Basis(Vector3(0.0, 0.0, 1.0), roll)
+	var offset := Vector3(
+		_wobble_lean * wobble_sway_ratio * _leg_skel_average,
+		_wobble_bob * wobble_bob_ratio * _leg_skel_average,
+		0.0)
+	_wobble.set_bone(_body_bone, offset, body_rotation)
+	if _abdomen_bone >= 0:
+		_wobble.set_bone(_abdomen_bone, Vector3.ZERO,
+			Basis(Vector3.UP, _wobble_lean * deg_to_rad(wobble_abdomen_yaw_degrees)))
+
+
+func _physics_process(delta: float) -> void:
+	if _unit == null:
+		return
+	var yaw := _unit.global_rotation.y
+	var rate := angle_difference(_prev_yaw, yaw) / maxf(delta, 0.0001)
+	_angular_velocity = lerpf(_angular_velocity, rate, 0.5)
+	_prev_yaw = yaw
+
+
 func _make_debug_sphere(radius: float) -> MeshInstance3D:
 	var sphere := MeshInstance3D.new()
 	var mesh := SphereMesh.new()
@@ -273,8 +464,13 @@ func _process(delta: float) -> void:
 	_blend = move_toward(_blend, 1.0 if active else 0.0, delta * blend_speed)
 	_ik.influence = _blend
 	_aligner.influence = _blend
+	if _wobble:
+		_wobble.influence = _blend
+		_wobble.active = wobble_enabled and _blend > 0.001
 	_ik.active = _blend > 0.001
 	_aligner.active = _blend > 0.001
+	_fingers.influence = _blend
+	_fingers.active = finger_lag_enabled and _blend > 0.001
 	
 	if active and not _was_active:
 		_replant()  # start walking with every foot at its home position
@@ -287,6 +483,9 @@ func _process(delta: float) -> void:
 		_update_steps(delta)
 	for foot in _feet:
 		_apply_foot(foot)
+	if not _unit_is_paused():
+		_update_wobble(delta)
+		_update_fingers(delta)
 
 
 func _wants_active() -> bool:
@@ -305,14 +504,39 @@ func _replant() -> void:
 		foot.planted = hit["position"]
 		foot.normal = hit["normal"]
 		foot.tip = foot.planted
+		foot.finger_phase = 0.0
+		foot.finger_pos = 0.0
 		_apply_foot(foot)
 
 
+# The foot's home spot in skeleton space, with the home offsets applied.
+func _home_skel(foot: Foot) -> Vector3:
+	var shift := Vector3(foot.side * home_outward_ratio, 0.0, home_forward_ratio) * foot.leg_skel
+	return foot.home_skel + shift
+
+
 func _home_world(foot: Foot) -> Vector3:
-	var scale_factor := maxf(skeleton.global_transform.basis.get_scale().x, 0.0001)
-	var leg_length := foot.reach / scale_factor  # in skeleton units
-	var shift := Vector3(signf(foot.home_skel.x) * home_outward_ratio, 0.0, home_forward_ratio) * leg_length
-	return skeleton.global_transform * (foot.home_skel + shift)
+	return skeleton.global_transform * _home_skel(foot)
+
+
+# Keeps a spot (skeleton space) inside the foot's zone: not under the body and
+# not past the middle of the gap to the neighbouring legs.
+func _constrain_skel(foot: Foot, pos: Vector3) -> Vector3:
+	var home := _home_skel(foot)
+	var min_x := absf(home.x) * min_lateral_ratio
+	if foot.side * pos.x < min_x:
+		pos.x = foot.side * min_x
+	pos.z = clampf(pos.z, home.z - foot.z_back_room, home.z + foot.z_front_room)
+	return pos
+
+
+# True when a planted foot has been carried outside its zone by the body
+# moving or turning, so it has to step now.
+func _outside_zone(foot: Foot) -> bool:
+	var pos := skeleton.global_transform.affine_inverse() * foot.planted
+	var margin := foot.leg_skel * 0.02
+	var constrained := _constrain_skel(foot, pos)
+	return absf(constrained.x - pos.x) > margin or absf(constrained.z - pos.z) > margin
 
 
 # Sends a foot's current state to the IK: the ankle target, the pole, and the
@@ -393,23 +617,42 @@ func _update_steps(delta: float) -> void:
 		var trigger := foot.reach * step_trigger_ratio
 		var force := foot.reach * force_step_ratio
 		var other_group_busy: bool = group_stepping[1 - foot.group]
-		if distance > force or (distance > trigger and not other_group_busy):
+		if distance > force or _outside_zone(foot) or (distance > trigger and not other_group_busy):
 			_begin_step(foot, home, velocity, trigger)
 			group_stepping[foot.group] = true
 
 
 func _begin_step(foot: Foot, home: Vector3, velocity: Vector3, trigger: float) -> void:
-	var speed := velocity.length()
+	# How fast this foot's home spot is travelling: the unit's own movement plus
+	# the swing from turning. Turning moves feet sideways, along arcs around the
+	# body, instead of back to front.
+	var from_centre := home - _unit.global_position
+	from_centre.y = 0.0
+	var foot_velocity := velocity + Vector3.UP.cross(from_centre) * _angular_velocity
+	var speed := foot_velocity.length()
 	var duration := max_step_duration
 	if speed > 0.01:
 		# One group is planted while the other swings, so a swing should take
 		# about as long as a planted foot needs to cover a stride.
 		duration = clampf(2.0 * trigger / speed * 0.9, min_step_duration, max_step_duration)
 	duration /= maxf(horizontal_speed, 0.05)
-	# Land slightly ahead of where the body will have carried the home spot by
-	# the end of the step, so the foot can trail behind it during the stance.
-	var lead := (velocity * duration * 0.5 * landing_lead_scale).limit_length(foot.reach * landing_lead_max_ratio)
-	var landing := home + velocity * duration + lead
+	
+	# Land slightly ahead of the home spot along the foot's own direction of
+	# travel, so the foot can trail behind it during the stance.
+	var lead := (foot_velocity * duration * 0.5 * landing_lead_scale).limit_length(foot.reach * landing_lead_max_ratio)
+	
+	# Where the body will be when the step ends (it moves and turns meanwhile).
+	# The landing spot is worked out in that future skeleton space, and kept
+	# inside this foot's zone there.
+	var unit_now := _unit.global_transform
+	var unit_after := Transform3D(
+		Basis(Vector3.UP, _angular_velocity * duration) * unit_now.basis,
+		unit_now.origin + velocity * duration)
+	var skeleton_after := unit_after * unit_now.affine_inverse() * skeleton.global_transform
+	var landing_skel := _home_skel(foot) + skeleton_after.basis.inverse() * lead
+	landing_skel = _constrain_skel(foot, landing_skel)
+	var landing := skeleton_after * landing_skel
+	
 	var hit := _ground_hit(foot, Vector3(landing.x, foot.planted.y, landing.z))
 	foot.stepping = true
 	foot.step_time = 0.0

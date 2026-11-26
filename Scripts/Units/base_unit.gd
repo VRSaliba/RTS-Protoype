@@ -15,8 +15,19 @@ class_name BaseUnit
 @export var attack_hit_delay: float = 0.6
 ## How far past touching (the two body radii) a unit can still strike.
 @export var attack_range_margin: float = 0.6
+## While the unit just stands idle, it plays its look-around animation at a random
+## time between these two values, in seconds. It does not change the unit's
+## state, and any other action interrupts it. Set the maximum to 0 to turn it off.
+@export var idle_look_min_time: float = 10.0
+@export var idle_look_max_time: float = 20.0
 ## How fast the unit turns toward where it is going, in radians per second.
-@export var turn_speed: float = 10.0
+@export var turn_speed: float = 6.0
+## If the unit has to turn by this many degrees or more to face where it is
+## going, it turns on the spot first. Below it, the unit moves while turning.
+@export_range(0.0, 180.0) var turn_in_place_angle: float = 90.0
+## Movement speed while turning, as a fraction of normal speed. It scales from
+## 1.0 (facing the right way) down to this value (right at turn_in_place_angle).
+@export_range(0.0, 1.0) var min_turn_move_ratio: float = 0.5
 ## If true, taking damage plays the hurt animation even mid-swing. A swing cut
 ## short that way never connects, so no cooldown starts and the unit can attack
 ## again right after the hurt animation. If false, units finish their swing first.
@@ -42,6 +53,11 @@ var paused: bool = false
 # Change this one during play (health, speed), never the shared resource.
 var base_stats: UnitBaseStats
 var current_model: UnitModel
+# Time spent standing idle, and when the next look-around is due.
+var _idle_time: float = 0.0
+var _next_idle_look: float = 15.0
+# True while the unit is still turning toward where it wants to go.
+var is_turning: bool = false
 var animator: ModelAnimator
 # True while a one-shot animation (attack, hurt, special, death) is playing.
 var action_playing: bool = false
@@ -77,16 +93,19 @@ func _ready() -> void:
 	health_bar.progress_bar.max_value = base_stats.max_health_points
 	health_bar.progress_bar.value = base_stats.current_health_points
 	
+	_next_idle_look = randf_range(idle_look_min_time, maxf(idle_look_min_time, idle_look_max_time))
 	add_to_group("all_units")
 
 func _physics_process(_delta: float) -> void:
 	health_bar.state_label.text = UnitState.find_key(current_state)
+	is_turning = false
 	match current_state:
 		UnitState.IDLE: state_idle()
 		UnitState.MOVING: state_moving()
 		UnitState.ATTACKING: state_attacking()
 		UnitState.USING_SKILL: state_using_skill()
 		UnitState.DEAD: state_dead()
+	_update_idle_look(get_physics_process_delta_time())
 	_update_animation()
 
 func set_move_target(new_move_target: Vector3) -> void:
@@ -123,18 +142,12 @@ func state_moving() -> void:
 		can_attack = false
 		if not paused:
 			var direction = global_position.direction_to(next_path_pos)
-			velocity = direction * base_stats.movement_speed
-			
-			if direction.length() > 0.01:
-				velocity = direction.normalized() * base_stats.movement_speed
-			else:
-				velocity = Vector3.ZERO
+			velocity = _steer(direction)
 			
 			if nav_agent.is_navigation_finished():
 				clear_move_target()
 				velocity = Vector3.ZERO
 			
-			_face_direction(direction)
 			move_and_slide()
 
 func state_attacking() -> void:
@@ -144,35 +157,47 @@ func state_attacking() -> void:
 		can_attack = false
 		if not paused:
 			var direction = global_position.direction_to(next_path_pos)
-			velocity = direction * base_stats.movement_speed
-			
-			if direction.length() > 0.01:
-				velocity = direction.normalized() * base_stats.movement_speed
-			else:
-				velocity = Vector3.ZERO
+			velocity = _steer(direction)
 			
 			if nav_agent.is_navigation_finished() or _in_attack_range():
 				if attack_cooldown_timer.is_stopped() and current_action != &"hurt" and not attack_hit_pending:
 					can_attack = true
 				velocity = Vector3.ZERO
 			
-			_face_direction(direction)
 			move_and_slide()
 	else:
 		find_new_random_attack_target()
 	if can_attack:
 		attack()
 
-## Turns the unit toward a movement direction at turn_speed. Only the flat
-## (ground) part of the direction counts, so a path point below the unit can
-## no longer flip or jitter the heading.
-func _face_direction(direction: Vector3) -> void:
+## Turns the unit toward `direction` at turn_speed and returns the velocity to
+## move with. The unit moves the way it is FACING, so it curves through corners
+## instead of snapping to the path. If it has to turn turn_in_place_angle or more
+## it turns on the spot first. Only the flat (ground) part of the direction is
+## used for turning, so a path point below the unit can't flip the heading.
+func _steer(direction: Vector3) -> Vector3:
+	is_turning = false
 	var flat := Vector3(direction.x, 0.0, direction.z)
 	if flat.length() < 0.01:
-		return
-	var target := atan2(flat.x, flat.z)
+		return Vector3.ZERO
+	
+	var target_yaw := atan2(flat.x, flat.z)
+	var difference := angle_difference(rotation.y, target_yaw)
 	var step := turn_speed * get_physics_process_delta_time()
-	rotation.y += clampf(angle_difference(rotation.y, target), -step, step)
+	rotation.y += clampf(difference, -step, step)
+	is_turning = absf(difference) > deg_to_rad(3.0)
+	
+	var limit := deg_to_rad(turn_in_place_angle)
+	var factor := 0.0
+	if absf(difference) < limit:
+		factor = lerpf(1.0, min_turn_move_ratio, absf(difference) / maxf(limit, 0.001))
+	
+	var facing := global_transform.basis.z
+	facing.y = 0.0
+	var result := facing.normalized() * base_stats.movement_speed * factor
+	# Keep the vertical part of the path direction, so the unit settles on the ground.
+	result.y = direction.normalized().y * base_stats.movement_speed
+	return result
 
 func state_using_skill() -> void:
 	# When you implement skills, trigger the animation with:
@@ -414,11 +439,34 @@ func _fit_ring(ring: MeshInstance3D, model: UnitModel) -> void:
 
 # --- Animation ---------------------------------------------------------------
 
+# Plays the look-around animation now and then while the unit stays idle. It is
+# only an animation: the unit's state does not change.
+func _update_idle_look(delta: float) -> void:
+	# Cut the look-around short as soon as the unit does anything else.
+	if current_action == &"idle_look" and current_state != UnitState.IDLE:
+		action_playing = false
+		current_action = &""
+		_idle_time = 0.0
+		return
+	
+	var standing := current_state == UnitState.IDLE and not paused and not is_turning \
+		and current_action == &"" and animator != null and idle_look_max_time > 0.0
+	if not standing:
+		_idle_time = 0.0
+		return
+	
+	_idle_time += delta
+	if _idle_time >= _next_idle_look:
+		_idle_time = 0.0
+		_next_idle_look = randf_range(idle_look_min_time, maxf(idle_look_min_time, idle_look_max_time))
+		_play_action(&"idle_look")
+
+
 func _update_animation() -> void:
 	if animator == null or action_playing or paused or current_state == UnitState.DEAD:
 		return
 	var moving := current_state in [UnitState.MOVING, UnitState.ATTACKING] \
-		and velocity.length() > 0.1
+		and (velocity.length() > 0.1 or is_turning)
 	if moving and animator.has_state(&"walk"):
 		animator.play(&"walk")
 	else:
