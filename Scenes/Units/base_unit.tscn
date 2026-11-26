@@ -11,8 +11,8 @@ height = 1.5
 viewport_path = NodePath("SubViewport")
 
 [sub_resource type="TorusMesh" id="TorusMesh_base"]
-inner_radius = 0.55
-outer_radius = 0.7
+inner_radius = 0.35
+outer_radius = 0.4
 
 [sub_resource type="StandardMaterial3D" id="StandardMaterial3D_base"]
 

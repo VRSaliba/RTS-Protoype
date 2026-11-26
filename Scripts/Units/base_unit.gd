@@ -10,24 +10,11 @@ class_name BaseUnit
 
 ## Everything that defines this unit: model, stats and skills.
 @export var unit_data: UnitData
-## FALLBACK only: used when the attack animation has no "hit" event.
-## Seconds after the attack animation starts before damage is applied.
-@export var attack_hit_delay: float = 0.6
-## How far past touching (the two body radii) a unit can still strike.
-@export var attack_range_margin: float = 0.6
 ## While the unit just stands idle, it plays its look-around animation at a random
 ## time between these two values, in seconds. It does not change the unit's
 ## state, and any other action interrupts it. Set the maximum to 0 to turn it off.
 @export var idle_look_min_time: float = 10.0
 @export var idle_look_max_time: float = 20.0
-## How fast the unit turns toward where it is going, in radians per second.
-@export var turn_speed: float = 6.0
-## If the unit has to turn by this many degrees or more to face where it is
-## going, it turns on the spot first. Below it, the unit moves while turning.
-@export_range(0.0, 180.0) var turn_in_place_angle: float = 90.0
-## Movement speed while turning, as a fraction of normal speed. It scales from
-## 1.0 (facing the right way) down to this value (right at turn_in_place_angle).
-@export_range(0.0, 1.0) var min_turn_move_ratio: float = 0.5
 ## If true, taking damage plays the hurt animation even mid-swing. A swing cut
 ## short that way never connects, so no cooldown starts and the unit can attack
 ## again right after the hurt animation. If false, units finish their swing first.
@@ -170,9 +157,9 @@ func state_attacking() -> void:
 	if can_attack:
 		attack()
 
-## Turns the unit toward `direction` at turn_speed and returns the velocity to
+## Turns the unit toward `direction` at the stat turn_speed and returns the velocity to
 ## move with. The unit moves the way it is FACING, so it curves through corners
-## instead of snapping to the path. If it has to turn turn_in_place_angle or more
+## instead of snapping to the path. If it has to turn the stat turn_in_place_angle or more
 ## it turns on the spot first. Only the flat (ground) part of the direction is
 ## used for turning, so a path point below the unit can't flip the heading.
 func _steer(direction: Vector3) -> Vector3:
@@ -183,14 +170,14 @@ func _steer(direction: Vector3) -> Vector3:
 	
 	var target_yaw := atan2(flat.x, flat.z)
 	var difference := angle_difference(rotation.y, target_yaw)
-	var step := turn_speed * get_physics_process_delta_time()
+	var step := base_stats.turn_speed * get_physics_process_delta_time()
 	rotation.y += clampf(difference, -step, step)
 	is_turning = absf(difference) > deg_to_rad(3.0)
 	
-	var limit := deg_to_rad(turn_in_place_angle)
+	var limit := deg_to_rad(base_stats.turn_in_place_angle)
 	var factor := 0.0
 	if absf(difference) < limit:
-		factor = lerpf(1.0, min_turn_move_ratio, absf(difference) / maxf(limit, 0.001))
+		factor = lerpf(1.0, base_stats.min_turn_move_ratio, absf(difference) / maxf(limit, 0.001))
 	
 	var facing := global_transform.basis.z
 	facing.y = 0.0
@@ -223,7 +210,7 @@ func attack() -> void:
 	
 	# Fallback for models without a hit event: wait a fixed delay.
 	# Time only counts while the game is not paused.
-	var hit_delay := attack_hit_delay / anim_speed
+	var hit_delay := base_stats.attack_hit_delay / anim_speed
 	var waited: float = 0.0
 	while waited < hit_delay:
 		await get_tree().physics_frame
@@ -272,7 +259,7 @@ func _in_attack_range() -> bool:
 		return false
 	var offset := attack_target.global_position - global_position
 	offset.y = 0.0
-	var reach := get_body_radius() + attack_target.get_body_radius() + attack_range_margin
+	var reach := get_body_radius() + attack_target.get_body_radius() + base_stats.attack_range_margin
 	return offset.length() <= reach
 
 func _apply_attack_hit() -> void:

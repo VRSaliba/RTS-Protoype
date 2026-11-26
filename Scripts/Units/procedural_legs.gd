@@ -30,8 +30,6 @@ extends Node
 ## spot (fraction of the leg's length): how far the leg STRETCHES before it
 ## moves. A full stride is about this plus the landing lead below.
 @export var step_trigger_ratio: float = 0.3
-## A foot steps no matter what once it is this far (fraction of leg length).
-@export var force_step_ratio: float = 0.5
 ## Targets are never placed farther than this fraction of the leg's length from
 ## its hip. This is the furthest the leg can ever stretch.
 @export_range(0.5, 1.0) var max_reach_ratio: float = 0.97
@@ -72,6 +70,11 @@ extends Node
 ## the body's centre line, so they never end up under the model (also while
 ## turning). 0 = no limit.
 @export_range(0.0, 1.0) var min_lateral_ratio: float = 0.55
+## The same limit while the unit is TURNING: tighter, so the feet on the inside of
+## the turn stay well out from under the body.
+@export_range(0.0, 1.0) var min_lateral_ratio_turning: float = 0.8
+## The turning rate (radians per second) at which the tighter limit fully applies.
+@export var turn_tighten_rate: float = 1.0
 
 @export_group("Ground")
 ## Physics layers the feet can stand on. Put your floor and terrain on these
@@ -175,6 +178,8 @@ class Foot:
 	var lift_time: float = 0.1
 	var lower_time: float = 0.1
 	var stepping: bool = false
+	var needs_step: bool = false          # far enough from home (or out of its zone) to step
+	var stepped_this_round: bool = false  # already had its step in the current round
 
 
 var _unit: CharacterBody3D
@@ -186,6 +191,8 @@ var _was_active: bool = false
 var _debug_printed: bool = false
 var _debug_lines: Array[String] = []
 var _angular_velocity: float = 0.0  # the unit's turning rate, rad/s
+var _lateral_ratio: float = 0.55    # the sideways limit in use right now
+var _turn: int = 0                  # the gait group whose turn it is to step
 var _wobble: BodyWobbleModifier
 var _fingers: FingerLagModifier
 var _body_bone: int = -1
@@ -446,6 +453,8 @@ func _physics_process(delta: float) -> void:
 	var rate := angle_difference(_prev_yaw, yaw) / maxf(delta, 0.0001)
 	_angular_velocity = lerpf(_angular_velocity, rate, 0.5)
 	_prev_yaw = yaw
+	var turning := clampf(absf(_angular_velocity) / maxf(turn_tighten_rate, 0.01), 0.0, 1.0)
+	_lateral_ratio = lerpf(min_lateral_ratio, maxf(min_lateral_ratio, min_lateral_ratio_turning), turning)
 
 
 func _make_debug_sphere(radius: float) -> MeshInstance3D:
@@ -498,6 +507,7 @@ func _unit_is_paused() -> bool:
 
 # Puts every foot back at its home position, standing still.
 func _replant() -> void:
+	_turn = 0
 	for foot in _feet:
 		var hit := _ground_hit(foot, _home_world(foot))
 		foot.stepping = false
@@ -506,6 +516,7 @@ func _replant() -> void:
 		foot.tip = foot.planted
 		foot.finger_phase = 0.0
 		foot.finger_pos = 0.0
+		foot.stepped_this_round = false
 		_apply_foot(foot)
 
 
@@ -523,7 +534,7 @@ func _home_world(foot: Foot) -> Vector3:
 # not past the middle of the gap to the neighbouring legs.
 func _constrain_skel(foot: Foot, pos: Vector3) -> Vector3:
 	var home := _home_skel(foot)
-	var min_x := absf(home.x) * min_lateral_ratio
+	var min_x := absf(home.x) * _lateral_ratio
 	if foot.side * pos.x < min_x:
 		pos.x = foot.side * min_x
 	pos.z = clampf(pos.z, home.z - foot.z_back_room, home.z + foot.z_front_room)
@@ -548,7 +559,16 @@ func _apply_foot(foot: Foot) -> void:
 	# The foot tip should touch the ground, so the ankle sits one foot-length
 	# above it, in the direction the (tilted) foot points.
 	var foot_world := tilt * (skeleton_basis * foot.foot_vec_skel)
-	foot.target.global_position = _clamp_to_reach(foot, foot.tip - foot_world)
+	
+	# Hard safety limit: a foot that is still waiting for its turn is dragged out
+	# rather than left under the body.
+	var tip := foot.tip
+	var tip_skel := skeleton.global_transform.affine_inverse() * tip
+	var min_x := absf(_home_skel(foot).x) * _lateral_ratio
+	if foot.side * tip_skel.x < min_x:
+		tip_skel.x = foot.side * min_x
+		tip = skeleton.global_transform * tip_skel
+	foot.target.global_position = _clamp_to_reach(foot, tip - foot_world)
 	foot.pole.global_position = skeleton.global_transform * foot.pole_skel
 	
 	var ortho := skeleton_basis.orthonormalized()
@@ -581,45 +601,77 @@ func _ground_hit(foot: Foot, pos: Vector3) -> Dictionary:
 	return {"position": hit["position"], "normal": hit["normal"]}
 
 
+# Walking rules that can never be broken:
+#  - Legs step in ROUNDS: only one gait group (a tripod) steps at a time, and the
+#    other group, which holds the adjacent legs, stays planted until it has landed.
+#  - Within a round a foot steps at most once. Its group has to wait for the
+#    other group's round before it can step again, so a leg never double steps.
+# A foot that has to wait is not forced: it just stretches (and is kept in reach
+# and out from under the body) until its turn comes.
 func _update_steps(delta: float) -> void:
 	var velocity := Vector3(_unit.velocity.x, 0.0, _unit.velocity.z)
-	var group_stepping := [false, false]
-	for foot in _feet:
-		if foot.stepping:
-			group_stepping[foot.group] = true
 	
+	# 1) Move the feet that are in the air.
+	for foot in _feet:
+		if not foot.stepping:
+			continue
+		foot.step_time += delta
+		var t := clampf(foot.step_time / foot.step_duration, 0.0, 1.0)
+		var eased := t * t * (3.0 - 2.0 * t)
+		var pos := foot.step_from.lerp(foot.step_to, eased)
+		# Height: rises for lift_time from the start and comes back down during
+		# the last lower_time, so lifting and lowering have their own speeds.
+		var rise := clampf(foot.step_time / foot.lift_time, 0.0, 1.0)
+		var fall := clampf((foot.step_duration - foot.step_time) / foot.lower_time, 0.0, 1.0)
+		var height := minf(rise, fall)
+		pos.y += height * height * (3.0 - 2.0 * height) * step_height_ratio * foot.reach
+		foot.tip = pos
+		foot.normal = foot.step_from_normal.slerp(foot.step_to_normal, eased)
+		if t >= 1.0:
+			foot.stepping = false
+			foot.planted = foot.step_to
+			foot.normal = foot.step_to_normal
+			foot.tip = foot.planted
+	
+	# 2) Which planted feet want to step?
+	var stepping := [false, false]
+	var pending := [false, false]  # wants to step and has not had its step this round
+	var wants := [false, false]    # wants to step
 	for foot in _feet:
 		if foot.stepping:
-			foot.step_time += delta
-			var t := clampf(foot.step_time / foot.step_duration, 0.0, 1.0)
-			var eased := t * t * (3.0 - 2.0 * t)
-			var pos := foot.step_from.lerp(foot.step_to, eased)
-			# Height: rises for lift_time from the start and comes back down during
-			# the last lower_time, so lifting and lowering have their own speeds.
-			var rise := clampf(foot.step_time / foot.lift_time, 0.0, 1.0)
-			var fall := clampf((foot.step_duration - foot.step_time) / foot.lower_time, 0.0, 1.0)
-			var height := minf(rise, fall)
-			pos.y += height * height * (3.0 - 2.0 * height) * step_height_ratio * foot.reach
-			foot.tip = pos
-			foot.normal = foot.step_from_normal.slerp(foot.step_to_normal, eased)
-			if t >= 1.0:
-				foot.stepping = false
-				foot.planted = foot.step_to
-				foot.normal = foot.step_to_normal
-				foot.tip = foot.planted
+			stepping[foot.group] = true
 			continue
-		
 		foot.tip = foot.planted
-		var home := _home_world(foot)
-		var offset := foot.planted - home
-		offset.y = 0.0
-		var distance := offset.length()
-		var trigger := foot.reach * step_trigger_ratio
-		var force := foot.reach * force_step_ratio
-		var other_group_busy: bool = group_stepping[1 - foot.group]
-		if distance > force or _outside_zone(foot) or (distance > trigger and not other_group_busy):
-			_begin_step(foot, home, velocity, trigger)
-			group_stepping[foot.group] = true
+		foot.needs_step = _needs_step(foot)
+		if foot.needs_step:
+			wants[foot.group] = true
+			if not foot.stepped_this_round:
+				pending[foot.group] = true
+	
+	# 3) The turn passes once the group whose turn it is has nothing left to do
+	# and the other group needs to step.
+	var other := 1 - _turn
+	if not stepping[_turn] and not stepping[other] and not pending[_turn] and wants[other]:
+		_turn = other
+		for foot in _feet:
+			foot.stepped_this_round = false
+	
+	# 4) Start steps, only for the group whose turn it is, and never while the
+	# other group is in the air.
+	if stepping[1 - _turn]:
+		return
+	for foot in _feet:
+		if foot.group != _turn or foot.stepping or not foot.needs_step or foot.stepped_this_round:
+			continue
+		_begin_step(foot, _home_world(foot), velocity, foot.reach * step_trigger_ratio)
+		foot.stepped_this_round = true
+
+
+# Far enough from its home spot, or carried out of its zone, that it should step.
+func _needs_step(foot: Foot) -> bool:
+	var offset := foot.planted - _home_world(foot)
+	offset.y = 0.0
+	return offset.length() > foot.reach * step_trigger_ratio or _outside_zone(foot)
 
 
 func _begin_step(foot: Foot, home: Vector3, velocity: Vector3, trigger: float) -> void:
